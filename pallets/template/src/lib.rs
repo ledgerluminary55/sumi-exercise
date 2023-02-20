@@ -30,13 +30,11 @@ pub mod pallet {
 		type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
 	}
 
-	// The pallet's runtime storage items.
-	// https://docs.substrate.io/main-docs/build/runtime-storage/
 	#[pallet::storage]
 	#[pallet::getter(fn oracle)]
 	pub type CurrentOracle<T: Config> = StorageValue<_, T::AccountId>;
 
-	#[derive(Encode, Decode, TypeInfo, MaxEncodedLen, Clone)]
+	#[derive(Encode, Decode, TypeInfo, MaxEncodedLen, Clone, Debug, PartialEq)]
 	#[scale_info(skip_type_params(T))]
 	pub struct OracleEvent<T: Config> {
 		pub data: BoundedVec<u8, ConstU32<1024>>,
@@ -76,48 +74,78 @@ pub mod pallet {
 		OracleEventsOverflow,
 	}
 
-	// Dispatchable functions allows users to interact with the pallet and invoke state changes.
-	// These functions materialize as "extrinsics", which are often compared to transactions.
-	// Dispatchable functions must be annotated with a weight and must return a DispatchResult.
+	#[pallet::hooks]
+	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+		fn on_idle(current_block: T::BlockNumber, _remaining_weight: Weight) -> Weight {
+			// Get all the oracle events in storage
+			let mut oracle_events = <OracleEvents<T>>::get();
+
+			// Get the index of the last valid event - an event that is less than 600 blocks old
+			let last_valid_event_index = oracle_events
+				.iter()
+				.position(|event| (current_block - event.timestamp) < T::BlockNumber::from(600u32))
+				.unwrap_or(0);
+
+			// If the last valid event is the first event, then there are no events that are less than 600 blocks old
+			if last_valid_event_index == 0 {
+				return Weight::from_ref_time(0);
+			}
+
+			// Remove all the events that are more than 600 blocks old
+			oracle_events.drain(0..last_valid_event_index);
+
+			// Update the oracle events storage
+			<OracleEvents<T>>::put(oracle_events);
+
+			return Weight::from_ref_time(0);
+		}
+	}
+
 	#[pallet::call]
 	impl<T: Config> Pallet<T> {
-		/// An example dispatchable that takes a singles value as a parameter, writes the value to
-		/// storage and emits an event. This function must be dispatched by a signed extrinsic.
 		#[pallet::call_index(0)]
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1).ref_time())]
-		pub fn do_something(origin: OriginFor<T>, something: u32) -> DispatchResult {
-			// Check that the extrinsic was signed and get the signer.
-			// This function will return an error if the extrinsic is not signed.
-			// https://docs.substrate.io/main-docs/build/origins/
-			let who = ensure_signed(origin)?;
+		pub fn set_oracle(origin: OriginFor<T>, oracle: T::AccountId) -> DispatchResult {
+			ensure_root(origin)?;
 
-			// Update storage.
-			<Something<T>>::put(something);
+			// Update the current oracle in storage
+			<CurrentOracle<T>>::put(oracle.clone());
 
-			// Emit an event.
-			Self::deposit_event(Event::SomethingStored { something, who });
-			// Return a successful DispatchResultWithPostInfo
+			// Emit an event that the oracle has been updated
+			Self::deposit_event(Event::OracleUpdated { new_oracle: oracle });
+
 			Ok(())
 		}
 
-		/// An example dispatchable that may throw a custom error.
 		#[pallet::call_index(1)]
 		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,1).ref_time())]
-		pub fn cause_error(origin: OriginFor<T>) -> DispatchResult {
-			let _who = ensure_signed(origin)?;
+		pub fn submit_event(origin: OriginFor<T>, data: Vec<u8>) -> DispatchResult {
+			let who = ensure_signed(origin)?;
 
-			// Read a value from storage.
-			match <Something<T>>::get() {
-				// Return an error if the value has not been set.
-				None => return Err(Error::<T>::NoneValue.into()),
-				Some(old) => {
-					// Increment the value read from storage; will error in the event of overflow.
-					let new = old.checked_add(1).ok_or(Error::<T>::StorageOverflow)?;
-					// Update the value in storage with the incremented result.
-					<Something<T>>::put(new);
-					Ok(())
-				},
-			}
+			// Get the current oracle from storage
+			let oracle = <CurrentOracle<T>>::get().ok_or(Error::<T>::OracleNotSet)?;
+
+			// Ensure that the caller is the current oracle
+			ensure!(oracle == who, Error::<T>::NotCurrentOracle);
+
+			// Ensure that the data is not too big
+			let data = BoundedVec::<u8, ConstU32<1024>>::try_from(data)
+				.map_err(|_| Error::<T>::VecTooBig)?;
+
+			let timestamp = <frame_system::Pallet<T>>::block_number();
+			let event = OracleEvent::<T> { data, oracle, timestamp };
+
+			// Append the event to the oracle events storage
+			OracleEvents::<T>::try_append(event.clone())
+				.map_err(|_| Error::<T>::OracleEventsOverflow)?;
+
+			// Emit an event that the event was submitted
+			Self::deposit_event(Event::EventSubmitted {
+				oracle: event.oracle,
+				timestamp: event.timestamp,
+			});
+
+			Ok(())
 		}
 	}
 }
