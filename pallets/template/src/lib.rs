@@ -33,28 +33,47 @@ pub mod pallet {
 	// The pallet's runtime storage items.
 	// https://docs.substrate.io/main-docs/build/runtime-storage/
 	#[pallet::storage]
-	#[pallet::getter(fn something)]
-	// Learn more about declaring storage items:
-	// https://docs.substrate.io/main-docs/build/runtime-storage/#declaring-storage-items
-	pub type Something<T> = StorageValue<_, u32>;
+	#[pallet::getter(fn oracle)]
+	pub type CurrentOracle<T: Config> = StorageValue<_, T::AccountId>;
 
-	// Pallets use events to inform users when important changes are made.
-	// https://docs.substrate.io/main-docs/build/events-errors/
+	#[derive(Encode, Decode, TypeInfo, MaxEncodedLen, Clone)]
+	#[scale_info(skip_type_params(T))]
+	pub struct OracleEvent<T: Config> {
+		pub data: BoundedVec<u8, ConstU32<1024>>,
+		pub oracle: T::AccountId,
+		pub timestamp: T::BlockNumber,
+	}
+
+	#[pallet::storage]
+	#[pallet::getter(fn oracle_events)]
+	pub type OracleEvents<T> =
+		StorageValue<_, BoundedVec<OracleEvent<T>, ConstU32<1000>>, ValueQuery>;
+
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
 	pub enum Event<T: Config> {
-		/// Event documentation should end with an array that provides descriptive names for event
-		/// parameters. [something, who]
-		SomethingStored { something: u32, who: T::AccountId },
+		/// The oracle has been updated
+		/// [new_oracle]
+		/// The new oracle
+		OracleUpdated { new_oracle: T::AccountId },
+		/// An event has been submitted
+		/// [oracle, timestamp]
+		/// The oracle that submitted the event
+		/// The timestamp of the block in which the event was submitted
+		EventSubmitted { oracle: T::AccountId, timestamp: T::BlockNumber },
 	}
 
 	// Errors inform users that something went wrong.
 	#[pallet::error]
 	pub enum Error<T> {
-		/// Error names should be descriptive.
-		NoneValue,
-		/// Errors should have helpful documentation associated with them.
-		StorageOverflow,
+		/// The oracle has not been set yet
+		OracleNotSet,
+		/// The caller is not the current oracle
+		NotCurrentOracle,
+		/// The submitted data is too big
+		VecTooBig,
+		/// The oracle events storage is full
+		OracleEventsOverflow,
 	}
 
 	// Dispatchable functions allows users to interact with the pallet and invoke state changes.
