@@ -1,15 +1,15 @@
 use crate as pallet_template;
 use frame_support::traits::{ConstU16, ConstU64};
+use frame_support::weights::Weight;
 use frame_system as system;
 use sp_core::H256;
 use sp_runtime::{
 	testing::Header,
 	traits::{BlakeTwo256, IdentityLookup},
 };
-
 type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Test>;
 type Block = frame_system::mocking::MockBlock<Test>;
-
+use crate::mock::sp_api_hidden_includes_construct_runtime::hidden_include::traits::Hooks;
 // Configure a mock runtime to test the pallet.
 frame_support::construct_runtime!(
 	pub enum Test where
@@ -56,4 +56,13 @@ impl pallet_template::Config for Test {
 // Build genesis storage according to the mock runtime.
 pub fn new_test_ext() -> sp_io::TestExternalities {
 	system::GenesisConfig::default().build_storage::<Test>().unwrap().into()
+}
+
+pub(crate) fn run_to_block(n: u64) {
+	let current_block = System::block_number();
+	assert!(n > current_block);
+	while System::block_number() < n {
+		TemplateModule::on_idle(System::block_number(), Weight::from_ref_time(0));
+		System::set_block_number(System::block_number() + 1);
+	}
 }
